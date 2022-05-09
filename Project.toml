@@ -1,0 +1,4 @@
+name = "ParticleInterpolator"
+uuid = "8de438ce-2477-40f7-917d-3ee18c5f1639"
+authors = ["Doug Rennehan <rennehan@uvic.ca>"]
+version = "0.1.0"
