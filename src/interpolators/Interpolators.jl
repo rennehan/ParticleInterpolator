@@ -4,24 +4,27 @@ import ..Kernels
 
 abstract type Container end
 
-mutable struct MovingLeastSquares <: Container
-    particle_data::Dict
-    grid::Array{Float64, 3}
-    grid_weight::Array{Float64, 3}
+struct MovingLeastSquares <: Container
+    N_grid_x::UInt32
+    N_grid_y::UInt32
+    N_grid_z::UInt32
+    grid_dimensions::Array{Float32}
     kernel::Kernels.Kernel
 end
 
-mutable struct Remeshed <: Container
-    particle_data::Dict
-    grid::Array{Float64, 3}
-    grid_weight::Array{Float64, 3}
+struct Remeshed <: Container
+    N_grid_x::UInt32
+    N_grid_y::UInt32
+    N_grid_z::UInt32
+    grid_dimensions::Array{Float32}
     kernel::Kernels.Kernel
 end
 
-mutable struct SPH <: Container
-    particle_data::Dict
-    grid::Array{Float64, 3}
-    grid_weight::Array{Float64, 3}
+struct SPH <: Container
+    N_grid_x::UInt32
+    N_grid_y::UInt32
+    N_grid_z::UInt32
+    grid_dimensions::Array{Float32}
     kernel::Kernels.Kernel
 end
 

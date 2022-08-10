@@ -1,23 +1,81 @@
 module Tools
 
-# TODO: Maybe use floor?
-get_max_idx(coord, radius, delta) = trunc(Int32, (coord + radius) / delta) + convert(Int32, 1)
-get_min_idx(coord, radius, delta) = trunc(Int32, (coord - radius) / delta) + convert(Int32, 1)
+"""
+    get_max_idx(coord::Float32, radius::Float32, delta::Float32)
 
-# Assume everything is periodic. If the index is outside of the box,
-# then just move it to the other side.
-function real_idx(idx::Int32, grid_info::Dict)
-    new_idx = idx
-    if idx > grid_info["grid_size_1d"]
-        new_idx = idx - grid_info["grid_size_1d"]
-    elseif idx < 1
-        new_idx = idx + grid_info["grid_size_1d"]
+    Get the maximum index in the grid for the extent of this particle.
+        
+...
+# Arguments
+- `coord::Float32`: The coordinate.
+- `radius::Float32`: The particle smoothing length.
+- `delta::Float32`: The cell physical size.
+...
+"""
+@fastmath function get_max_idx(coord::Float32, radius::Float32, 
+                               delta::Float32)
+    if delta == 0.0
+        1
+    else
+        trunc(Int64, (coord + radius) / delta) + 1
     end
-
-    convert(Int32, new_idx)
 end
 
-function adjusted_difference(difference::Float64)
+"""
+    get_min_idx(coord::Float32, radius::Float32, delta::Float32)
+
+    Get the minimum index in the grid for the extent of this particle.
+        
+...
+# Arguments
+- `coord::Float32`: The coordinate.
+- `radius::Float32`: The particle smoothing length.
+- `delta::Float32`: The cell physical size.
+...
+"""
+@fastmath function get_min_idx(coord::Float32, radius::Float32, 
+                               delta::Float32)
+    if delta == 0.0
+        1
+    else
+        trunc(Int64, (coord - radius) / delta) + 1
+    end
+end
+
+"""
+    real_idx(idx::Int64, grid_size::Int64)
+
+    Get the true grid index taking into account periodic
+    boundary conditions. 
+        
+...
+# Arguments
+- `idx::Int64`: The measured, unshifted index.
+- `grid_size::Int64`: The grid cell length in this direction.
+...
+"""
+function real_idx(idx::Int64, grid_size::Int64)
+    if idx > grid_size
+        idx - grid_size
+    elseif idx < 1
+        idx + grid_size
+    else
+        idx
+    end
+end
+
+"""
+    adjusted_difference(difference::Float32)
+
+    Get the true distance to the cell taking into account periodic
+    boundary conditions. 
+        
+...
+# Arguments
+- `difference::Float32`: The measured, unshifted distance.
+...
+"""
+@fastmath function adjusted_difference(difference::Float32)
     if difference > 0.5
         difference - 1.0
     elseif difference < -0.5
@@ -27,15 +85,40 @@ function adjusted_difference(difference::Float64)
     end
 end
 
-function get_indices_differences(min_idx::Int32, max_idx::Int32, 
-                                 indices::Array{Int32}, 
-                                 diffs::Array{Float64}, 
-                                 coordinate::Float64, grid_info::Dict)
-    running_idx::Int32 = 1
-    for di=min_idx:max_idx
-        indices[running_idx] = real_idx(di, grid_info)
+"""
+    interpolate_get_indices_differences(min_idx::Int64, max_idx::Int64, 
+                                        indices::Array{Int64}, 
+                                        diffs::Array{Float32}, 
+                                        coordinate::Float32, 
+                                        grid_size::Int64,
+                                        ruler::Array{Float32})
+
+    Fill up the pre-allocated arrays that contain the particle indices
+    in the grid as well as the distances between the particle and those
+    grid cells. 
+        
+...
+# Arguments
+- `min_idx::Int64`: The true minimum index in the grid.
+- `max_idx::Int64`: The true maximum index in the grid.
+- `indices::Array{Int64}`: The array to be filled with the shifted cell locations.
+- `diffs::Array{Float32}`: The distances array to be filled.
+- `coordinate::Float32`: The coordinate to measure the distance.
+- `grid_size::Int64`: The grid size (in cells) in this direction.
+- `ruler::Array{Float32}`: The measuring ruler in real coordinates.
+...
+"""
+function get_indices_differences(min_idx::Int64, max_idx::Int64, 
+                                 indices::Array{Int64}, 
+                                 diffs::Array{Float32}, 
+                                 coordinate::Float32, 
+                                 grid_size::Int64,
+                                 ruler::Array{Float32})
+    running_idx::Int64 = 1
+    @fastmath @inbounds for di=min_idx:max_idx
+        indices[running_idx] = real_idx(di, grid_size)
         diffs[running_idx] = adjusted_difference(
-            coordinate - grid_info["ruler"][indices[running_idx]]
+            coordinate - ruler[indices[running_idx]]
         )
 
         running_idx += 1

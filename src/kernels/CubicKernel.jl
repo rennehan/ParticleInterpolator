@@ -1,6 +1,6 @@
 struct CubicKernel <: Kernel
     dimension::Integer
-    normalization::Float64
+    normalization::Float32
 end
 
 function CubicKernel(dimension::Integer)
@@ -17,7 +17,7 @@ function CubicKernel(dimension::Integer)
     CubicKernel(dimension, normalization)
 end
 
-function kernel_evaluate(u::Float64, h_inv::Float64, kernel::CubicKernel)
+function kernel_evaluate(u::Float32, h_inv::Float32, kernel::CubicKernel)
     weight_factor = kernel.normalization * h_inv^kernel.dimension
     u *= h_inv
 
