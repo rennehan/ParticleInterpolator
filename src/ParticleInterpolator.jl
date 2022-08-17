@@ -6,9 +6,24 @@ include("Tools.jl")
 include("kernels/Kernels.jl")
 include("interpolators/Interpolators.jl")
 
+"""
+...
+# Arguments
+- `container::ParticleCentricContainer`: A ParticleCentricContainer struct that contains the particle data, tree, and grid.
+- `coordinates::Array{Float32}`: Columns of N particles, rows of 3 coordinates.
+- `smoothing_lengths::Array{Float32}`: The smoothing lengths of all of the particles.
+- `deposits::Array{Float32}`: The quantities to deposit onto the grid.
+...
+"""
+function interpolate_particles(container::Interpolators.GridCentricContainer,
+                               coordinates::Array{Float32},
+                               smoothing_lengths::Array{Float32},
+                               deposits::Array{Float32})
+
+end
 
 """
-    accumulate_in_grid(p::Int64, container::Interpolators.Container,
+    accumulate_in_grid(p::Int64, container::Interpolators.ParticleCentricContainer,
                        grid::Array{Float32}, min_first_idx::Int64, 
                        max_first_idx::Int64, N_dimensions::Integer, 
                        coordinate::Array{Float32}, smoothing_length::Float32,
@@ -29,7 +44,7 @@ include("interpolators/Interpolators.jl")
 ...
 # Arguments
 - `p::Int64`: The particle index.
-- `container::Container`: A Container struct holding the input data.
+- `container::ParticleCentricContainer`: A ParticleCentricContainer struct holding the input data.
 - `grid::Array{Float32}`: The grid to fill up.
 - `min_first_idx::Int64`: The minimum grid index in the x direction of the particle.
 - `max_first_idx::Int64`: The maximum grid index in the x direction of the particle.
@@ -52,7 +67,7 @@ include("interpolators/Interpolators.jl")
 ...
 """
 function accumulate_in_grid(p::Int64, 
-                            container::Interpolators.Container,
+                            container::Interpolators.ParticleCentricContainer,
                             grid::Array{Float32},
                             min_first_idx::Int64, 
                             max_first_idx::Int64,
@@ -215,23 +230,23 @@ function accumulate_in_grid(p::Int64,
 end
 
 """
-    interpolate_particles(container::Container, coordinates::Array{Float32},
+    interpolate_particles(container::ParticleCentricContainer, coordinates::Array{Float32},
                           smoothing_lengths::Array{Float32},
                           deposits::Array{Float32})
 
     Construct the grid to interpolate the particle data, and then interpolate. 
-    The type of interpolation depends on the type of Container passed to the
+    The type of interpolation depends on the type of ParticleCentricContainer passed to the
     function.
 
 ...
 # Arguments
-- `container::Container`: A Container struct that contains the particle data, tree, and grid.
+- `container::ParticleCentricContainer`: A ParticleCentricContainer struct that contains the particle data, tree, and grid.
 - `coordinates::Array{Float32}`: Columns of N particles, rows of 3 coordinates.
 - `smoothing_lengths::Array{Float32}`: The smoothing lengths of all of the particles.
 - `deposits::Array{Float32}`: The quantities to deposit onto the grid.
 ...
 """
-function interpolate_particles(container::Interpolators.Container,
+function interpolate_particles(container::Interpolators.ParticleCentricContainer,
                                coordinates::Array{Float32},
                                smoothing_lengths::Array{Float32},
                                deposits::Array{Float32})
