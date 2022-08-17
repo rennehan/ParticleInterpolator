@@ -171,7 +171,7 @@ function accumulate_in_grid(p::Int64,
     first_running_idx::Int64 = min_first_idx
     # Loop over the entire chunk
     @fastmath @inbounds for ci=1:num_first_cells, cj=1:num_second_cells, ck=1:num_third_cells
-        kernel_weights[ci, cj, ck] = Interpolators.interpolate(
+        kernel_weights[ci, cj, ck] = Interpolators.evaluate(
             Float32(sqrt(
                 first_diffs[ci] * first_diffs[ci] +
                 second_diffs[cj] * second_diffs[cj] +
@@ -210,7 +210,7 @@ function accumulate_in_grid(p::Int64,
     # completely avoids any race conditions.
     @fastmath @inbounds for ci=1:num_first_cells, cj=1:num_second_cells, ck=1:num_third_cells
         grid[first_indices[ci], second_indices[cj], third_indices[ck]] += 
-                deposit * kernel_weights[ci, cj, ck] / sum_of_kernel_weights 
+                deposit * kernel_weights[ci, cj, ck] / sum_of_kernel_weights
     end
 end
 
@@ -222,7 +222,7 @@ end
     Construct the grid to interpolate the particle data, and then interpolate. 
     The type of interpolation depends on the type of Container passed to the
     function.
-        
+
 ...
 # Arguments
 - `container::Container`: A Container struct that contains the particle data, tree, and grid.
