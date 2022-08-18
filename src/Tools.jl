@@ -1,6 +1,26 @@
 module Tools
 
 """
+    centered_cube_bitmask(coords::Matrix{Float32}, radius::Float32)
+
+    Returns a boolean array where True marks coords within the radius.
+    The coordinates must be centered on a point of interest, because
+    they are assumed here to be differences not the true coordinates.
+        
+...
+# Arguments
+- `coords::Matrix{Float32}`: The matrix of coordinates to check.
+- `radius::Float32`: The radius to search.
+...
+"""
+function centered_cube_bitmask(coords::Matrix{Float32}, radius::Float32)
+    x = ifelse.(abs.(@view(coords[:, 1])) .< radius, true, false)
+    y = ifelse.(abs.(@view(coords[:, 2])) .< radius, true, false)
+    z = ifelse.(abs.(@view(coords[:, 3])) .< radius, true, false)
+    x .&& y .&& z
+end
+
+"""
     get_max_idx(coord::Float32, radius::Float32, delta::Float32)
 
     Get the maximum index in the grid for the extent of this particle.

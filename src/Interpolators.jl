@@ -21,7 +21,4 @@ struct SPH <: ParticleCentricContainer
     kernel::Kernels.Kernel
 end
 
-include("MovingLeastSquaresInterpolator.jl")
-include("SPHInterpolator.jl")
-
 end
