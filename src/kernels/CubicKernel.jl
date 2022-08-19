@@ -31,3 +31,5 @@ function kernel_evaluate(u::Float32, h_inv::Float32, kernel::CubicKernel)
 
     segment * weight_factor
 end
+
+kappa(kernel::CubicKernel) = 2.0

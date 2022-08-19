@@ -45,25 +45,31 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
     ruler_y = zeros(Float32, grid_sizes[2])
     ruler_z = zeros(Float32, grid_sizes[3])
 
-    ruler_x = Float32.(((1:grid_sizes[1] .- 1) .+ 0.5) .* (grid_dimensions[1] / grid_sizes[1]))
+    ruler_x = Float32.(
+        ((1:grid_sizes[1] .- 1) .+ 0.5) .* (grid_dimensions[1] / grid_sizes[1])
+    )
 
     if container.kernel.dimension == 1
         ruler_y = zeros(Float32, 1)
         ruler_z = zeros(Float32, 1)
     elseif container.kernel.dimension == 2
-        ruler_y = Float32.(((1:grid_sizes[2] .- 1) .+ 0.5) .* (grid_dimensions[2] / grid_sizes[2]))
+        ruler_y = Float32.(
+            ((1:grid_sizes[2] .- 1) .+ 0.5) .* (grid_dimensions[2] / grid_sizes[2])
+        )
         ruler_z = zeros(Float32, 1)
     else
-        ruler_y = Float32.(((1:grid_sizes[2] .- 1) .+ 0.5) .* (grid_dimensions[2] / grid_sizes[2]))
-        ruler_z = Float32.(((1:grid_sizes[3] .- 1) .+ 0.5) .* (grid_dimensions[3] / grid_sizes[3]))
+        ruler_y = Float32.(
+            ((1:grid_sizes[2] .- 1) .+ 0.5) .* (grid_dimensions[2] / grid_sizes[2])
+        )
+        ruler_z = Float32.(
+            ((1:grid_sizes[3] .- 1) .+ 0.5) .* (grid_dimensions[3] / grid_sizes[3])
+        )
     end
 
     # The cutoff radius for the method. We must have
     # cubes as our grid cells, so we can just look at
     # the first dimension to get the grid cell size.
-    #
-    # TODO: 1.5 should be an input to test.
-    radius = Float32(2.0 / N_particles^(1/3)) #* container.grid_dimensions[1] / container.N_grid_x
+    radius = Float32(Kernels.kappa(container.kernel) / N_particles^(1/3))
     h_inv = Float32(1.0) / radius
 
     println("radius=$radius")
@@ -77,7 +83,6 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
     F_J_i = zeros(Float32, 10)
     kernel_weights_ij = zeros(Float32, 500)
     L_ij = zeros(Float32, 500)
-
 
     # To make sure that we conserve the deposit, we
     # need to find the sum of kernel weights for all
@@ -229,10 +234,26 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
 
         if N_nearby < 11 || N_nearby > 500
             println("Skipping cell ($ci, $cj, $ck), bad neighbor count (N=$N_nearby)!")
+
+            # Revert coordinates
+            @inbounds for p=1:N_particles
+                coordinates[p, 1] += ruler_x[ci]
+                coordinates[p, 2] += ruler_y[cj]
+                coordinates[p, 3] += ruler_z[ck]
+
+                @inbounds for dim=1:3
+                    if coordinates[p, dim] < 0.0
+                        coordinates[p, dim] += 1.0
+                    end
+                    if coordinates[p, dim] > 1.0
+                        coordinates[p, dim] -= 1.0
+                    end
+                end
+            end
+
             continue
         end
 
-        #sum_of_kernel_weights::Float32 = 0.0
         @inbounds for p=1:N_nearby
             kernel_weights_ij[p] = Kernels.kernel_evaluate(
                 sqrt(
@@ -243,12 +264,10 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
                 h_inv,
                 container.kernel
             )
-
-            #sum_of_kernel_weights += kernel_weights_ij[p]
         end
 
         @inbounds for p=1:N_nearby
-            L_ij[p] = kernel_weights_ij[p] / all_particle_weights[p]#sum_of_kernel_weights
+            L_ij[p] = kernel_weights_ij[p] / all_particle_weights[p]
             Lambda_I_ij[p, 1] = Float32(1.0)
             Lambda_I_ij[p, 2] = local_coords[p, 1]
             Lambda_I_ij[p, 3] = local_coords[p, 2]
@@ -276,8 +295,12 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
             end
         end
 
-        # Solve for the values and gradients
-        F_J_i = R_IJ_i \ T_I_i
+        try
+            # Solve for the values and gradients
+            F_J_i = R_IJ_i \ T_I_i
+        catch err
+            error("Error: $err, N_nearby=$N_nearby")
+        end
 
         # Store the value of the deposit at this location
         grid[ci, cj, ck] = F_J_i[1]
@@ -465,17 +488,14 @@ function accumulate_in_grid(p::Int64,
     # domain.
     sum_of_kernel_weights::Float32 = 0
 
-    first_running_idx::Int64 = min_first_idx
     # Loop over the entire chunk
     @fastmath @inbounds for ci=1:num_first_cells, cj=1:num_second_cells, ck=1:num_third_cells
         kernel_weights[ci, cj, ck] = Kernels.kernel_evaluate(
             Float32(sqrt(
-                first_diffs[ci] * first_diffs[ci] +
-                second_diffs[cj] * second_diffs[cj] +
-                third_diffs[ck] * third_diffs[ck]
+                first_diffs[ci]^2 + second_diffs[cj]^2 + third_diffs[ck]^2
             )),
             inv_smoothing_length,
-            container
+            container.kernel
         )
 
         sum_of_kernel_weights += kernel_weights[ci, cj, ck]
