@@ -14,9 +14,9 @@ module Tools
 ...
 """
 function centered_cube_bitmask(coords::Matrix{Float32}, radius::Float32)
-    x = ifelse.(abs.(@view(coords[:, 1])) .< radius, true, false)
-    y = ifelse.(abs.(@view(coords[:, 2])) .< radius, true, false)
-    z = ifelse.(abs.(@view(coords[:, 3])) .< radius, true, false)
+    x = ifelse.(abs.(@view(coords[1, :])) .< radius, true, false)
+    y = ifelse.(abs.(@view(coords[2, :])) .< radius, true, false)
+    z = ifelse.(abs.(@view(coords[3, :])) .< radius, true, false)
     x .&& y .&& z
 end
 

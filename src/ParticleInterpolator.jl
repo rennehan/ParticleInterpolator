@@ -1,10 +1,33 @@
 module ParticleInterpolator
 
-using NearestNeighbors, ProgressMeter
+using NearestNeighbors, Distances, ProgressMeter
 
 include("Tools.jl")
 include("kernels/Kernels.jl")
 include("Interpolators.jl")
+
+"""
+    function get_particle_tree(N_dimensions::Integer, grid_dimensions::Array{Float32}, 
+                               coordinates::Array{Float32})
+
+    Construct the BallTree of the input coordinates for fast distance computations. 
+    Assumes a PeriodicEuclidean metric. Returns the tree and the metric in a tuple.
+
+...
+# Arguments
+- `N_dimensions::Integer`: The true number of dimensions (taken from the kernel).
+- `grid_dimensions::Array{Float32}`: A vector of the lengths of the grid in each dimension.
+- `coordinates::Array{Float32}`: Columns of N_particles, rows of 3 coordinates.
+...
+"""
+function get_particle_tree(N_dimensions::Integer, grid_dimensions::Array{Float32}, 
+                           coordinates::Array{Float32})
+    metric = PeriodicEuclidean([grid_dimensions[i] for i=1:N_dimensions])
+    NearestNeighbors.BallTree(
+        @views(coordinates[1:N_dimensions, :]),
+        metric
+    ), metric
+end
 
 """
     interpolate_particles(container::GridCentricContainer, coordinates::Array{Float32},
@@ -26,7 +49,9 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
                                coordinates::Array{Float32},
                                smoothing_lengths::Array{Float32},
                                deposits::Array{Float32})
-    N_particles = size(coordinates)[1]
+    N_particles = size(coordinates)[2]
+
+    println("N_particles=$N_particles")
     grid_dimensions = container.grid_dimensions
     grid = zeros(
         Float32, 
@@ -39,6 +64,14 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
         println("grid_sizes[$i]=", grid_sizes[i])
         println("grid_dimensions[$i]=", grid_dimensions[i])
     end
+
+    # Using a BallTree leads to over a factor of ~10 times
+    # speed-up (maybe even more!)
+    particle_tree, _ = get_particle_tree(
+        container.kernel.dimension,
+        container.grid_dimensions,
+        coordinates
+    )
 
     # True coordinates of the grid cell in that direction.
     ruler_x = zeros(Float32, grid_sizes[1])
@@ -76,13 +109,16 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
     println("h_inv=$h_inv")
 
     # 500 maximum neighbors
+    max_neighbors = 500
+
     # TODO: 10 is for 2nd order, 4 is for 1st order
-    Lambda_I_ij = zeros(Float32, (500, 10))
+    Lambda_I_ij = zeros(Float32, (10, max_neighbors))
     T_I_i = zeros(Float32, 10)
     R_IJ_i = zeros(Float32, (10, 10))
     F_J_i = zeros(Float32, 10)
-    kernel_weights_ij = zeros(Float32, 500)
-    L_ij = zeros(Float32, 500)
+    kernel_weights_ij = zeros(Float32, max_neighbors)
+    L_ij = zeros(Float32, max_neighbors)
+    local_coords = zeros(Float32, (3, max_neighbors))
 
     # To make sure that we conserve the deposit, we
     # need to find the sum of kernel weights for all
@@ -117,34 +153,34 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
     )
     @inbounds for p=1:N_particles
         min_first_idx = Tools.get_min_idx(
-            coordinates[p, 1],
+            coordinates[1, p],
             radius,
             delta_x
         )
         max_first_idx = Tools.get_max_idx(
-            coordinates[p, 1],
+            coordinates[1, p],
             radius,
             delta_x
         )
 
         min_second_idx = Tools.get_min_idx(
-            coordinates[p, 2],
+            coordinates[2, p],
             radius,
             delta_y
         )
         max_second_idx = Tools.get_max_idx(
-            coordinates[p, 2],
+            coordinates[2, p],
             radius,
             delta_y
         )
 
         min_third_idx = Tools.get_min_idx(
-            coordinates[p, 3],
+            coordinates[3, p],
             radius,
             delta_z
         )
         max_third_idx = Tools.get_max_idx(
-            coordinates[p, 3],
+            coordinates[3, p],
             radius,
             delta_z
         )
@@ -158,7 +194,7 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
             min_first_idx, max_first_idx, 
             first_indices, 
             first_diffs, 
-            coordinates[p, 1], 
+            coordinates[1, p], 
             grid_sizes[1],
             ruler_x
         )
@@ -167,7 +203,7 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
             min_second_idx, max_second_idx, 
             second_indices, 
             second_diffs, 
-            coordinates[p, 2], 
+            coordinates[2, p], 
             grid_sizes[2],
             ruler_y
         )
@@ -176,12 +212,12 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
             min_third_idx, max_third_idx, 
             third_indices, 
             third_diffs, 
-            coordinates[p, 3], 
+            coordinates[3, p], 
             grid_sizes[3],
             ruler_z
         )
 
-        @inbounds for ci=1:num_first_cells, cj=1:num_second_cells, ck=1:num_third_cells
+        @inbounds for ck=1:num_third_cells, cj=1:num_second_cells, ci=1:num_first_cells
             all_particle_weights[p] += Kernels.kernel_evaluate(
                 sqrt(
                     first_diffs[ci]^2 + 
@@ -203,63 +239,44 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
         0.5, 
         "Interpolating $N_particles particles over $total_cells cells..."
     )
-    @inbounds for ci=1:container.N_grid_x, cj=1:container.N_grid_y, ck=1:container.N_grid_z
-        # Center coordinates on grid cell
-        @inbounds for p=1:N_particles
-            coordinates[p, 1] -= ruler_x[ci]
-            coordinates[p, 2] -= ruler_y[cj]
-            coordinates[p, 3] -= ruler_z[ck]
+    @inbounds for ck=1:container.N_grid_z, cj=1:container.N_grid_y, ci=1:container.N_grid_x
+        idx = NearestNeighbors.inrange(
+            particle_tree, 
+            [ruler_x[ci], ruler_y[cj], ruler_z[ck]],
+            radius,
+            true
+        )
 
-            @inbounds for dim=1:3
-                if coordinates[p, dim] < -0.5
-                    coordinates[p, dim] += 1.0
-                end
-                if coordinates[p, dim] > 0.5
-                    coordinates[p, dim] -= 1.0
-                end
+        local_deposits = @views(deposits[idx])
+        N_nearby = length(local_deposits)
+
+        # local_coords hold the centered coordinates of the particle compared
+        # to the grid cell.
+        local_coords[1, 1:N_nearby] = @views(coordinates[1, idx]) .- ruler_x[ci]
+        local_coords[2, 1:N_nearby] = @views(coordinates[2, idx]) .- ruler_y[cj]
+        local_coords[3, 1:N_nearby] = @views(coordinates[3, idx]) .- ruler_z[ck]
+
+        @inbounds for p=1:N_nearby, dim=1:3
+            if local_coords[dim, p] < -0.5
+                local_coords[dim, p] += 1.0
+            end
+            if local_coords[dim, p] > 0.5
+                local_coords[dim, p] -= 1.0
             end
         end
 
-        idx = Tools.centered_cube_bitmask(
-            coordinates,
-            radius
-        )
 
-        # Sicne we are centered on the grid cell,
-        # the local_coords are actually the differences 
-        # themselves!
-        local_coords = copy(coordinates[idx, :])
-        local_deposits = copy(deposits[idx])
-        N_nearby = length(local_deposits)
-
-        if N_nearby < 11 || N_nearby > 500
-            println("Skipping cell ($ci, $cj, $ck), bad neighbor count (N=$N_nearby)!")
-
-            # Revert coordinates
-            @inbounds for p=1:N_particles
-                coordinates[p, 1] += ruler_x[ci]
-                coordinates[p, 2] += ruler_y[cj]
-                coordinates[p, 3] += ruler_z[ck]
-
-                @inbounds for dim=1:3
-                    if coordinates[p, dim] < 0.0
-                        coordinates[p, dim] += 1.0
-                    end
-                    if coordinates[p, dim] > 1.0
-                        coordinates[p, dim] -= 1.0
-                    end
-                end
-            end
-
+        if N_nearby < 11 || N_nearby > max_neighbors
+            error("Cell ($ci, $cj, $ck) has a bad neighbor count (N=$N_nearby)!")
             continue
         end
 
         @inbounds for p=1:N_nearby
             kernel_weights_ij[p] = Kernels.kernel_evaluate(
                 sqrt(
-                    local_coords[p, 1]^2 +
-                    local_coords[p, 2]^2 +
-                    local_coords[p, 3]^2
+                    local_coords[1, p]^2 +
+                    local_coords[2, p]^2 +
+                    local_coords[3, p]^2
                 ),
                 h_inv,
                 container.kernel
@@ -268,31 +285,30 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
 
         @inbounds for p=1:N_nearby
             L_ij[p] = kernel_weights_ij[p] / all_particle_weights[p]
-            Lambda_I_ij[p, 1] = Float32(1.0)
-            Lambda_I_ij[p, 2] = local_coords[p, 1]
-            Lambda_I_ij[p, 3] = local_coords[p, 2]
-            Lambda_I_ij[p, 4] = local_coords[p, 3]
-            Lambda_I_ij[p, 5] = local_coords[p, 1]^2
-            Lambda_I_ij[p, 6] = local_coords[p, 2]^2
-            Lambda_I_ij[p, 7] = local_coords[p, 3]^2
-            Lambda_I_ij[p, 8] = local_coords[p, 1] * local_coords[p, 2]
-            Lambda_I_ij[p, 9] = local_coords[p, 1] * local_coords[p, 3]
-            Lambda_I_ij[p, 10] = local_coords[p, 2] * local_coords[p, 3]
+            Lambda_I_ij[1, p] = Float32(1.0)
+            Lambda_I_ij[2, p] = local_coords[1, p]
+            Lambda_I_ij[3, p] = local_coords[2, p]
+            Lambda_I_ij[4, p] = local_coords[3, p]
+            Lambda_I_ij[5, p] = local_coords[1, p]^2
+            Lambda_I_ij[6, p] = local_coords[2, p]^2
+            Lambda_I_ij[7, p] = local_coords[3, p]^2
+            Lambda_I_ij[8, p] = local_coords[1, p] * local_coords[2, p]
+            Lambda_I_ij[9, p] = local_coords[1, p] * local_coords[3, p]
+            Lambda_I_ij[10, p] = local_coords[2, p] * local_coords[3, p]
         end
 
-        @inbounds for dim=1:10
-            T_I_i[dim] = 0.0
-            @inbounds for p=1:N_nearby
-                T_I_i[dim] += L_ij[p] * local_deposits[p] * Lambda_I_ij[p, dim] 
-            end
-        end
-
-        @inbounds for dim1=1:10, dim2=1:10
+        @inbounds for dim2=1:10, dim1=1:10
+            T_I_i[dim2] = 0.0
             R_IJ_i[dim1, dim2] = 0.0
-            @inbounds for p=1:N_nearby
-                # The second Lambda_I_ij is really Theta_J_ij
-                R_IJ_i[dim1, dim2] += L_ij[p] * Lambda_I_ij[p, dim1] * Lambda_I_ij[p, dim2]
-            end
+        end
+
+        @inbounds for p=1:N_nearby, dim=1:10
+            T_I_i[dim] += L_ij[p] * local_deposits[p] * Lambda_I_ij[dim, p] 
+        end
+
+        @inbounds for p=1:N_nearby, dim2=1:10, dim1=1:10
+            # The second Lambda_I_ij is really Theta_J_ij
+            R_IJ_i[dim1, dim2] += L_ij[p] * Lambda_I_ij[dim1, p] * Lambda_I_ij[dim2, p]
         end
 
         try
@@ -304,22 +320,6 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
 
         # Store the value of the deposit at this location
         grid[ci, cj, ck] = F_J_i[1]
-
-        # Revert coordinates
-        @inbounds for p=1:N_particles
-            coordinates[p, 1] += ruler_x[ci]
-            coordinates[p, 2] += ruler_y[cj]
-            coordinates[p, 3] += ruler_z[ck]
-
-            @inbounds for dim=1:3
-                if coordinates[p, dim] < 0.0
-                    coordinates[p, dim] += 1.0
-                end
-                if coordinates[p, dim] > 1.0
-                    coordinates[p, dim] -= 1.0
-                end
-            end
-        end
 
         ProgressMeter.next!(progress)
     end
@@ -489,7 +489,7 @@ function accumulate_in_grid(p::Int64,
     sum_of_kernel_weights::Float32 = 0
 
     # Loop over the entire chunk
-    @fastmath @inbounds for ci=1:num_first_cells, cj=1:num_second_cells, ck=1:num_third_cells
+    @fastmath @inbounds for ck=1:num_third_cells, cj=1:num_second_cells, ci=1:num_first_cells
         kernel_weights[ci, cj, ck] = Kernels.kernel_evaluate(
             Float32(sqrt(
                 first_diffs[ci]^2 + second_diffs[cj]^2 + third_diffs[ck]^2
@@ -525,7 +525,7 @@ function accumulate_in_grid(p::Int64,
     # It is safe to directly add to the grid and grid_weight
     # fields since we have ensured that the parallelization
     # completely avoids any race conditions.
-    @fastmath @inbounds for ci=1:num_first_cells, cj=1:num_second_cells, ck=1:num_third_cells
+    @fastmath @inbounds for ck=1:num_third_cells, cj=1:num_second_cells, ci=1:num_first_cells
         grid[first_indices[ci], second_indices[cj], third_indices[ck]] += 
                 deposit * kernel_weights[ci, cj, ck] / sum_of_kernel_weights
     end
@@ -553,7 +553,7 @@ function interpolate_particles(container::Interpolators.ParticleCentricContainer
                                smoothing_lengths::Array{Float32},
                                deposits::Array{Float32})
 
-    N_particles = size(coordinates)[1]
+    N_particles = size(coordinates)[2]
     if length(smoothing_lengths) != N_particles
         error("If there are no particle smoothing lengths, please pass in an empty array of length the number of particles.")
     end
@@ -571,28 +571,6 @@ function interpolate_particles(container::Interpolators.ParticleCentricContainer
     # for now, and redo them unparallelized at the end.
     boundary_flag = zeros(Integer, N_particles)
 
-    if all(y->y==smoothing_lengths[1], smoothing_lengths)
-        particle_tree = NearestNeighbors.KDTree(
-            coordinates,
-            leafsize = 10
-        )
-
-        # knn returns a multidimensional array of indices and distances
-        # from each of the N_neighbor nearest neighbors. We want to
-        # take the maximum distance as the smoothing length.
-        idxs, dists = NearestNeighbors.knn(
-            particle_tree, 
-            coordinates, 
-            N_neighbor
-        )
-
-        smoothing_lengths = zeros(Float32, N_particles)
-
-        @inbounds for i in eachIndex(dists)
-            smoothing_lengths[i] = maximum(dists[i, :])
-        end
-    end
-
     grid_dimensions = container.grid_dimensions
     grid = zeros(
         Float32, 
@@ -602,6 +580,7 @@ function interpolate_particles(container::Interpolators.ParticleCentricContainer
     grid_dimensions = container.grid_dimensions
     N_dimensions = container.kernel.dimension
 
+    println("N_dimensions: $N_dimensions")
     # Create a ruler for each gridded direction. It will
     # store the true coordinates of the grid cell in that
     # direction.
@@ -620,7 +599,30 @@ function interpolate_particles(container::Interpolators.ParticleCentricContainer
     # normalization to the maximum grid length in
     # real (whatever those are) units.
     grid_dimensions ./= max_coord
-    smoothing_lengths ./= max_coord
+    coordinates ./= max_coord
+
+    if all(y->y==smoothing_lengths[1], smoothing_lengths)
+        particle_tree, _ = get_particle_tree(
+            N_dimensions,
+            grid_dimensions,
+            coordinates
+        )
+
+        # knn returns a multidimensional array of indices and distances
+        # from each of the N_neighbor nearest neighbors. We want to
+        # take the maximum distance as the smoothing length.
+        _, dists = NearestNeighbors.knn(
+            particle_tree, 
+            @views(coordinates[1:N_dimensions, :]), 
+            N_neighbor
+        )
+
+        smoothing_lengths = zeros(Float32, N_particles)
+
+        @inbounds for i=1:N_particles
+            smoothing_lengths[i] = maximum(dists[i])
+        end
+    end
 
     # Assume that it is x (idx=1) at first as the 
     # maximum dimension. Also sets for the 2D
@@ -681,8 +683,8 @@ function interpolate_particles(container::Interpolators.ParticleCentricContainer
     # Sort all of the particles by their coordinates in 
     # the direction of the maximum grid extent, since
     # we will chunk in that direction.
-    indices = sortperm(coordinates[:, primary_idx])
-    coordinates = coordinates[indices, :]
+    indices = sortperm(coordinates[primary_idx, :])
+    coordinates = coordinates[:, indices]
     smoothing_lengths = smoothing_lengths[indices]
     deposits = deposits[indices]
     inv_smoothing_lengths = Float32(1.0) ./ smoothing_lengths
@@ -784,12 +786,12 @@ function interpolate_particles(container::Interpolators.ParticleCentricContainer
             # accumulate_in_grid() or else the boundary
             # particles would be skipped again!
             max_first_idx = Tools.get_max_idx(
-                coordinates[p, primary_idx],
+                coordinates[primary_idx, p],
                 smoothing_lengths[p],
                 deltas[primary_idx]
             )
             min_first_idx = Tools.get_min_idx(
-                coordinates[p, primary_idx],
+                coordinates[primary_idx, p],
                 smoothing_lengths[p],
                 deltas[primary_idx]
             )
@@ -810,7 +812,7 @@ function interpolate_particles(container::Interpolators.ParticleCentricContainer
                 min_first_idx, 
                 max_first_idx, 
                 N_dimensions,
-                coordinates[p, :],
+                coordinates[:, p],
                 smoothing_lengths[p],
                 inv_smoothing_lengths[p],
                 deposits[p],
@@ -873,12 +875,12 @@ function interpolate_particles(container::Interpolators.ParticleCentricContainer
             boundary_count += 1
 
             max_first_idx = Tools.get_max_idx(
-                coordinates[p, primary_idx],
+                coordinates[primary_idx, p],
                 smoothing_lengths[p],
                 deltas[primary_idx]
             )
             min_first_idx = Tools.get_min_idx(
-                coordinates[p, primary_idx],
+                coordinates[primary_idx, p],
                 smoothing_lengths[p],
                 deltas[primary_idx]
             )
@@ -890,7 +892,7 @@ function interpolate_particles(container::Interpolators.ParticleCentricContainer
                 min_first_idx, 
                 max_first_idx, 
                 N_dimensions,
-                coordinates[p, :],
+                coordinates[:, p],
                 smoothing_lengths[p],
                 inv_smoothing_lengths[p],
                 deposits[p],
