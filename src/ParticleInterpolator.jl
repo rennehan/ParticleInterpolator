@@ -284,7 +284,7 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
         end
 
         @inbounds for p=1:N_nearby
-            L_ij[p] = kernel_weights_ij[p] / all_particle_weights[p]
+            L_ij[p] = kernel_weights_ij[p] / all_particle_weights[idx[p]]
             Lambda_I_ij[1, p] = Float32(1.0)
             Lambda_I_ij[2, p] = local_coords[1, p]
             Lambda_I_ij[3, p] = local_coords[2, p]
