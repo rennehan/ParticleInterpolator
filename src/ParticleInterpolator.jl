@@ -144,92 +144,92 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
     first_diffs = zeros(Float32, max_first_cells)
     second_diffs = zeros(Float32, max_second_cells)
     third_diffs = zeros(Float32, max_third_cells)
-    all_particle_weights = zeros(Float32, N_particles)
+    all_particle_weights::Float32 = 0.0
 
     progress = ProgressMeter.Progress(
         N_particles, 
         0.5, 
         "Finding kernel weights for $N_particles particles..."
     )
-    @inbounds for p=1:N_particles
-        min_first_idx = Tools.get_min_idx(
-            coordinates[1, p],
-            radius,
-            delta_x
-        )
-        max_first_idx = Tools.get_max_idx(
-            coordinates[1, p],
-            radius,
-            delta_x
-        )
 
-        min_second_idx = Tools.get_min_idx(
-            coordinates[2, p],
-            radius,
-            delta_y
-        )
-        max_second_idx = Tools.get_max_idx(
-            coordinates[2, p],
-            radius,
-            delta_y
-        )
+    # All particles have the same extent here, since we are
+    # grid centric and looking over a certain radius.
+    # Just look at p=1 and be done.
+    min_first_idx = Tools.get_min_idx(
+        coordinates[1, 1],
+        radius,
+        delta_x
+    )
+    max_first_idx = Tools.get_max_idx(
+        coordinates[1, 1],
+        radius,
+        delta_x
+    )
 
-        min_third_idx = Tools.get_min_idx(
-            coordinates[3, p],
-            radius,
-            delta_z
+    min_second_idx = Tools.get_min_idx(
+        coordinates[2, 1],
+        radius,
+        delta_y
+    )
+    max_second_idx = Tools.get_max_idx(
+        coordinates[2, 1],
+        radius,
+        delta_y
+    )
+
+    min_third_idx = Tools.get_min_idx(
+        coordinates[3, 1],
+        radius,
+        delta_z
+    )
+    max_third_idx = Tools.get_max_idx(
+        coordinates[3, 1],
+        radius,
+        delta_z
+    )
+
+    # What is the total extent in cells of the particle?
+    num_first_cells = max_first_idx - min_first_idx + 1
+    num_second_cells = max_second_idx - min_second_idx + 1
+    num_third_cells = max_third_idx - min_third_idx + 1
+
+    Tools.get_indices_differences(
+        min_first_idx, max_first_idx, 
+        first_indices, 
+        first_diffs, 
+        coordinates[1, 1], 
+        grid_sizes[1],
+        ruler_x
+    )
+
+    Tools.get_indices_differences(
+        min_second_idx, max_second_idx, 
+        second_indices, 
+        second_diffs, 
+        coordinates[2, 1], 
+        grid_sizes[2],
+        ruler_y
+    )
+
+    Tools.get_indices_differences(
+        min_third_idx, max_third_idx, 
+        third_indices, 
+        third_diffs, 
+        coordinates[3, 1], 
+        grid_sizes[3],
+        ruler_z
+    )
+
+    @inbounds for ck=1:num_third_cells, cj=1:num_second_cells, ci=1:num_first_cells
+        all_particle_weights += Kernels.kernel_evaluate(
+            sqrt(
+                first_diffs[ci]^2 + 
+                second_diffs[cj]^2 + 
+                third_diffs[ck]^2
+            ),
+            h_inv,
+            container.kernel
         )
-        max_third_idx = Tools.get_max_idx(
-            coordinates[3, p],
-            radius,
-            delta_z
-        )
-
-        # What is the total extent in cells of the particle?
-        num_first_cells = max_first_idx - min_first_idx + 1
-        num_second_cells = max_second_idx - min_second_idx + 1
-        num_third_cells = max_third_idx - min_third_idx + 1
-
-        Tools.get_indices_differences(
-            min_first_idx, max_first_idx, 
-            first_indices, 
-            first_diffs, 
-            coordinates[1, p], 
-            grid_sizes[1],
-            ruler_x
-        )
-
-        Tools.get_indices_differences(
-            min_second_idx, max_second_idx, 
-            second_indices, 
-            second_diffs, 
-            coordinates[2, p], 
-            grid_sizes[2],
-            ruler_y
-        )
-
-        Tools.get_indices_differences(
-            min_third_idx, max_third_idx, 
-            third_indices, 
-            third_diffs, 
-            coordinates[3, p], 
-            grid_sizes[3],
-            ruler_z
-        )
-
-        @inbounds for ck=1:num_third_cells, cj=1:num_second_cells, ci=1:num_first_cells
-            all_particle_weights[p] += Kernels.kernel_evaluate(
-                sqrt(
-                    first_diffs[ci]^2 + 
-                    second_diffs[cj]^2 + 
-                    third_diffs[ck]^2
-                ),
-                h_inv,
-                container.kernel
-            )
-        end
-
-        ProgressMeter.next!(progress)
     end
 
     # For each grid cell, search within some cutoff
@@ -284,7 +284,7 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
         end
 
         @inbounds for p=1:N_nearby
-            L_ij[p] = kernel_weights_ij[p] / all_particle_weights[idx[p]]
+            L_ij[p] = kernel_weights_ij[p] / all_particle_weights
             Lambda_I_ij[1, p] = Float32(1.0)
             Lambda_I_ij[2, p] = local_coords[1, p]
             Lambda_I_ij[3, p] = local_coords[2, p]

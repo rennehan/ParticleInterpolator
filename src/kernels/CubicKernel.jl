@@ -30,4 +30,4 @@ function kernel_evaluate(u::Float32, h_inv::Float32, kernel::CubicKernel)
     end
 end
 
-kappa(kernel::CubicKernel) = 2.0
+kappa(kernel::CubicKernel) = 2.1
