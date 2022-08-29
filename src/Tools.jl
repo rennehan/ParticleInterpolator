@@ -74,7 +74,7 @@ end
 - `grid_size::Int64`: The grid cell length in this direction.
 ...
 """
-function real_idx(idx::Int64, grid_size::Int64)
+function real_idx(idx::Int64, grid_size::UInt32)
     if idx > grid_size
         idx - grid_size
     elseif idx < 1
@@ -110,7 +110,7 @@ end
                                         indices::Array{Int64}, 
                                         diffs::Array{Float32}, 
                                         coordinate::Float32, 
-                                        grid_size::Int64,
+                                        grid_size::UInt32,
                                         ruler::Array{Float32})
 
     Fill up the pre-allocated arrays that contain the particle indices
@@ -132,7 +132,7 @@ function get_indices_differences(min_idx::Int64, max_idx::Int64,
                                  indices::Array{Int64}, 
                                  diffs::Array{Float32}, 
                                  coordinate::Float32, 
-                                 grid_size::Int64,
+                                 grid_size::UInt32,
                                  ruler::Array{Float32})
     running_idx::Int64 = 1
     @fastmath @inbounds for di=min_idx:max_idx

@@ -18,24 +18,18 @@ function QuinticKernel(dimension::Integer)
 end
 
 function kernel_evaluate(u::Float32, h_inv::Float32, kernel::QuinticKernel)
-    weight_factor = kernel.normalization * h_inv^kernel.dimension
     u *= h_inv
-
-    one_minus_u = 1.0 - u
-    one_third_minus_u = (1.0 / 3.0) - u
-    two_thirds_minus_u = (2.0 / 3.0) - u
-
     if u < 1.0 / 3.0
-        segment = one_minus_u^5 - 6.0 * two_thirds_minus_u^5 + 15.0 * one_third_minus_u^5
+        ((1.0 - u)^5 - 6.0 * ((2.0 / 3.0) - u)^5.0 + 15.0 * ((1.0 / 3.0) - u)^5.0) *
+                kernel.normalization * h_inv^kernel.dimension 
     elseif u >= 1.0 / 3.0 && u < 2.0 / 3.0
-        segment = one_minus_u^5 - 6.0 * two_thirds_minus_u^5
+        ((1.0 - u)^5.0 - 6.0 * ((2.0 / 3.0) - u)^5.0) *
+                kernel.normalization * h_inv^kernel.dimension
     elseif u >= 2.0 / 3.0 && u < 1.0
-        segment = one_minus_u^5
+        (1.0 - u)^5.0 * kernel.normalization * h_inv^kernel.dimension
     else
-        segment = 0.0
+        0.0
     end
-
-    segment * weight_factor
 end
 
 kappa(kernel::QuinticKernel) = 2.0

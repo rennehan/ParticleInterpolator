@@ -57,7 +57,7 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
         Float32, 
         (container.N_grid_x, container.N_grid_y, container.N_grid_z)
     )
-    grid_sizes = size(grid)
+    grid_sizes = [container.N_grid_x, container.N_grid_y, container.N_grid_z]
     total_cells = container.N_grid_x * container.N_grid_y * container.N_grid_z
 
     for i=1:3
