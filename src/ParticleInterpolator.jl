@@ -289,12 +289,12 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
             Lambda_I_ij[2, p] = local_coords[1, p]
             Lambda_I_ij[3, p] = local_coords[2, p]
             Lambda_I_ij[4, p] = local_coords[3, p]
-            Lambda_I_ij[5, p] = local_coords[1, p]^2
-            Lambda_I_ij[6, p] = local_coords[2, p]^2
-            Lambda_I_ij[7, p] = local_coords[3, p]^2
-            Lambda_I_ij[8, p] = local_coords[1, p] * local_coords[2, p]
-            Lambda_I_ij[9, p] = local_coords[1, p] * local_coords[3, p]
-            Lambda_I_ij[10, p] = local_coords[2, p] * local_coords[3, p]
+            Lambda_I_ij[5, p] = 0.5 * local_coords[1, p]^2.0
+            Lambda_I_ij[6, p] = 0.5 * local_coords[2, p]^2.0
+            Lambda_I_ij[7, p] = 0.5 * local_coords[3, p]^2.0
+            Lambda_I_ij[8, p] = 0.5 * local_coords[1, p] * local_coords[2, p]
+            Lambda_I_ij[9, p] = 0.5 * local_coords[1, p] * local_coords[3, p]
+            Lambda_I_ij[10, p] = 0.5 * local_coords[2, p] * local_coords[3, p]
         end
 
         @inbounds for dim2=1:10, dim1=1:10
@@ -335,7 +335,7 @@ end
                        inv_smoothing_length::Float32, deposit::Float32,
                        idx_list::Array{Integer}, deltas::Array{Float32},
                        rulers::Dict{Integer, Array{Float32}}, 
-                       grid_sizes::Tuple{Int64, Int64, Int64},
+                       grid_sizes::Array{UInt32},
                        kernel_weights::Array{Float32}, 
                        first_indices::Array{Int64},
                        second_indices::Array{Int64}, 
@@ -361,7 +361,7 @@ end
 - `idx_list::Array{Integer}`: The mapping between index and coordinate.
 - `deltas::Array{Float32}`: The grid cell size in real coordinates.
 - `rulers::Dict{Integer, Array{Float32}}`: The ruler for each coordinate direction.
-- `grid_sizes::Tuple{Int64, Int64, Int64}`: The number of grid cells in each direction.
+- `grid_sizes::Array{UInt32}`: The number of grid cells in each direction.
 - `kernel_weights::Array{Float32}`: The kernel weights array to fill up for each particle.
 - `first_indices::Array{Int64}`: The indices in the grid for the first direction.
 - `second_indices::Array{Int64}`: The indices in the grid for the second direction.
@@ -384,7 +384,7 @@ function accumulate_in_grid(p::Int64,
                             idx_list::Array{Integer},
                             deltas::Array{Float32},
                             rulers::Dict{Integer, Array{Float32}},
-                            grid_sizes::Tuple{Int64, Int64, Int64},
+                            grid_sizes::Array{UInt32},
                             kernel_weights::Array{Float32},
                             first_indices::Array{Int64},
                             second_indices::Array{Int64},
@@ -576,7 +576,7 @@ function interpolate_particles(container::Interpolators.ParticleCentricContainer
         Float32, 
         (container.N_grid_x, container.N_grid_y, container.N_grid_z)
     )
-    grid_sizes = size(grid)
+    grid_sizes = [container.N_grid_x, container.N_grid_y, container.N_grid_z]
     grid_dimensions = container.grid_dimensions
     N_dimensions = container.kernel.dimension
 
@@ -602,6 +602,8 @@ function interpolate_particles(container::Interpolators.ParticleCentricContainer
     coordinates ./= max_coord
 
     if all(y->y==smoothing_lengths[1], smoothing_lengths)
+        @warn "This will be very VERY slow, NearestNeighbors.jl is not threaded!"
+
         particle_tree, _ = get_particle_tree(
             N_dimensions,
             grid_dimensions,
