@@ -30,7 +30,7 @@ function get_particle_tree(N_dimensions::Integer, grid_dimensions::Array{Float32
 end
 
 """
-    interpolate_particles(container::GridCentricContainer, coordinates::Array{Float32},
+    interpolate_particles(container::Nearest, coordinates::Array{Float32},
                           smoothing_lengths::Array{Float32},
                           deposits::Array{Float32})
 
@@ -39,13 +39,13 @@ end
     function.
 ...
 # Arguments
-- `container::GridCentricContainer`: A GridCentricContainer struct that contains the particle data, tree, and grid.
+- `container::Nearest`: A Nearest struct that contains the particle data, tree, and grid.
 - `coordinates::Array{Float32}`: Columns of N particles, rows of 3 coordinates.
 - `smoothing_lengths::Array{Float32}`: The smoothing lengths of all of the particles.
 - `deposits::Array{Float32}`: The quantities to deposit onto the grid.
 ...
 """
-function interpolate_particles(container::Interpolators.GridCentricContainer,
+function interpolate_particles(container::Interpolators.Nearest,
                                coordinates::Array{Float32},
                                smoothing_lengths::Array{Float32},
                                deposits::Array{Float32})
@@ -79,7 +79,7 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
     ruler_z = zeros(Float32, grid_sizes[3])
 
     ruler_x = Float32.(
-        ((1:grid_sizes[1] .- 1) .+ 0.5) .* (grid_dimensions[1] / grid_sizes[1])
+        ((1:(grid_sizes[1] + 1) .- 1) .+ 0.5) .* (grid_dimensions[1] / (grid_sizes[1] + 1))
     )
 
     if container.kernel.dimension == 1
@@ -87,15 +87,108 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
         ruler_z = zeros(Float32, 1)
     elseif container.kernel.dimension == 2
         ruler_y = Float32.(
-            ((1:grid_sizes[2] .- 1) .+ 0.5) .* (grid_dimensions[2] / grid_sizes[2])
+            ((1:(grid_sizes[2] + 1) .- 1) .+ 0.5) .* (grid_dimensions[2] / (grid_sizes[2] + 1))
         )
         ruler_z = zeros(Float32, 1)
     else
         ruler_y = Float32.(
-            ((1:grid_sizes[2] .- 1) .+ 0.5) .* (grid_dimensions[2] / grid_sizes[2])
+            ((1:(grid_sizes[2] + 1) .- 1) .+ 0.5) .* (grid_dimensions[2] / (grid_sizes[2] + 1))
         )
         ruler_z = Float32.(
-            ((1:grid_sizes[3] .- 1) .+ 0.5) .* (grid_dimensions[3] / grid_sizes[3])
+            ((1:(grid_sizes[3] + 1) .- 1) .+ 0.5) .* (grid_dimensions[3] / (grid_sizes[3] + 1))
+        )
+    end
+
+    # For each grid cell, search within some cutoff
+    # radius for particles and then sum them into the bin.
+    progress = ProgressMeter.Progress(
+        total_cells, 
+        0.5, 
+        "Interpolating $N_particles particles over $total_cells cells..."
+    )
+    @inbounds Threads.@threads for I in CartesianIndices(grid) #   ck=1:container.N_grid_z, cj=1:container.N_grid_y, ci=1:container.N_grid_x
+        ci, cj, ck = Tuple(I)
+        idx, _ = NearestNeighbors.knn(
+            particle_tree, 
+            [ruler_x[ci], ruler_y[cj], ruler_z[ck]],
+            1
+        )
+
+        grid[I] = deposits[idx[1]]
+
+        ProgressMeter.next!(progress)
+    end
+
+    grid
+end
+
+"""
+    interpolate_particles(container::MovingLeastSquares, coordinates::Array{Float32},
+                          smoothing_lengths::Array{Float32},
+                          deposits::Array{Float32})
+
+    Construct the grid to interpolate the particle data, and then interpolate. 
+    The type of interpolation depends on the type of ParticleCentricContainer passed to the
+    function.
+...
+# Arguments
+- `container::MovingLeastSquares`: A MovingLeastSquares struct that contains the particle data, tree, and grid.
+- `coordinates::Array{Float32}`: Columns of N particles, rows of 3 coordinates.
+- `smoothing_lengths::Array{Float32}`: The smoothing lengths of all of the particles.
+- `deposits::Array{Float32}`: The quantities to deposit onto the grid.
+...
+"""
+function interpolate_particles(container::Interpolators.MovingLeastSquares,
+                               coordinates::Array{Float32},
+                               smoothing_lengths::Array{Float32},
+                               deposits::Array{Float32})
+    N_particles = size(coordinates)[2]
+
+    println("N_particles=$N_particles")
+    grid_dimensions = container.grid_dimensions
+    grid = zeros(
+        Float32, 
+        (container.N_grid_x, container.N_grid_y, container.N_grid_z)
+    )
+    grid_sizes = [container.N_grid_x, container.N_grid_y, container.N_grid_z]
+    total_cells = container.N_grid_x * container.N_grid_y * container.N_grid_z
+
+    for i=1:3
+        println("grid_sizes[$i]=", grid_sizes[i])
+        println("grid_dimensions[$i]=", grid_dimensions[i])
+    end
+
+    # Using a BallTree leads to over a factor of ~10 times
+    # speed-up (maybe even more!)
+    particle_tree, _ = get_particle_tree(
+        container.kernel.dimension,
+        container.grid_dimensions,
+        coordinates
+    )
+
+    # True coordinates of the grid cell in that direction.
+    ruler_x = zeros(Float32, grid_sizes[1])
+    ruler_y = zeros(Float32, grid_sizes[2])
+    ruler_z = zeros(Float32, grid_sizes[3])
+
+    ruler_x = Float32.(
+        ((1:(grid_sizes[1] + 1) .- 1) .+ 0.5) .* (grid_dimensions[1] / (grid_sizes[1] + 1))
+    )
+
+    if container.kernel.dimension == 1
+        ruler_y = zeros(Float32, 1)
+        ruler_z = zeros(Float32, 1)
+    elseif container.kernel.dimension == 2
+        ruler_y = Float32.(
+            ((1:(grid_sizes[2] + 1) .- 1) .+ 0.5) .* (grid_dimensions[2] / (grid_sizes[2] + 1))
+        )
+        ruler_z = zeros(Float32, 1)
+    else
+        ruler_y = Float32.(
+            ((1:(grid_sizes[2] + 1) .- 1) .+ 0.5) .* (grid_dimensions[2] / (grid_sizes[2] + 1))
+        )
+        ruler_z = Float32.(
+            ((1:(grid_sizes[3] + 1) .- 1) .+ 0.5) .* (grid_dimensions[3] / (grid_sizes[3] + 1))
         )
     end
 
@@ -145,12 +238,6 @@ function interpolate_particles(container::Interpolators.GridCentricContainer,
     second_diffs = zeros(Float32, max_second_cells)
     third_diffs = zeros(Float32, max_third_cells)
     all_particle_weights::Float32 = 0.0
-
-    progress = ProgressMeter.Progress(
-        N_particles, 
-        0.5, 
-        "Finding kernel weights for $N_particles particles..."
-    )
 
     # All particles have the same extent here, since we are
     # grid centric and looking over a certain radius.
