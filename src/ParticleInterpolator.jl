@@ -1,6 +1,6 @@
 module ParticleInterpolator
 
-using NearestNeighbors, Distances, ProgressMeter
+using NearestNeighbors, Distances, ProgressMeter, JLD
 
 include("Tools.jl")
 include("kernels/Kernels.jl")
@@ -79,7 +79,8 @@ function interpolate_particles(container::Interpolators.Nearest,
     ruler_z = zeros(Float32, grid_sizes[3])
 
     ruler_x = Float32.(
-        ((1:(grid_sizes[1] + 1) .- 1) .+ 0.5) .* (grid_dimensions[1] / (grid_sizes[1] + 1))
+        ((1:(grid_sizes[1] + 1) .- 1) .+ 0.5) .* 
+            (grid_dimensions[1] / (grid_sizes[1] + 1))
     )
 
     if container.kernel.dimension == 1
@@ -87,15 +88,18 @@ function interpolate_particles(container::Interpolators.Nearest,
         ruler_z = zeros(Float32, 1)
     elseif container.kernel.dimension == 2
         ruler_y = Float32.(
-            ((1:(grid_sizes[2] + 1) .- 1) .+ 0.5) .* (grid_dimensions[2] / (grid_sizes[2] + 1))
+            ((1:(grid_sizes[2] + 1) .- 1) .+ 0.5) .* 
+                (grid_dimensions[2] / (grid_sizes[2] + 1))
         )
         ruler_z = zeros(Float32, 1)
     else
         ruler_y = Float32.(
-            ((1:(grid_sizes[2] + 1) .- 1) .+ 0.5) .* (grid_dimensions[2] / (grid_sizes[2] + 1))
+            ((1:(grid_sizes[2] + 1) .- 1) .+ 0.5) .* 
+                (grid_dimensions[2] / (grid_sizes[2] + 1))
         )
         ruler_z = Float32.(
-            ((1:(grid_sizes[3] + 1) .- 1) .+ 0.5) .* (grid_dimensions[3] / (grid_sizes[3] + 1))
+            ((1:(grid_sizes[3] + 1) .- 1) .+ 0.5) .* 
+                (grid_dimensions[3] / (grid_sizes[3] + 1))
         )
     end
 
@@ -106,7 +110,7 @@ function interpolate_particles(container::Interpolators.Nearest,
         0.5, 
         "Interpolating $N_particles particles over $total_cells cells..."
     )
-    @inbounds Threads.@threads for I in CartesianIndices(grid) #   ck=1:container.N_grid_z, cj=1:container.N_grid_y, ci=1:container.N_grid_x
+    @inbounds Threads.@threads for I in CartesianIndices(grid)
         ci, cj, ck = Tuple(I)
         idx, _ = NearestNeighbors.knn(
             particle_tree, 
@@ -123,22 +127,442 @@ function interpolate_particles(container::Interpolators.Nearest,
 end
 
 """
-    interpolate_particles(container::MovingLeastSquares, coordinates::Array{Float32},
+    interpolate_particles(container::MovingLeastSquaresVariable, 
+                          coordinates::Array{Float32},
                           smoothing_lengths::Array{Float32},
                           deposits::Array{Float32})
 
     Construct the grid to interpolate the particle data, and then interpolate. 
-    The type of interpolation depends on the type of ParticleCentricContainer passed to the
-    function.
+    The type of interpolation depends on the type of ParticleCentricContainer 
+    passed to the function.
 ...
 # Arguments
-- `container::MovingLeastSquares`: A MovingLeastSquares struct that contains the particle data, tree, and grid.
+- `container::MovingLeastSquaresVariable`: A MovingLeastSquaresVariable struct 
+                                           that contains the particle data, 
+                                           tree, and grid.
 - `coordinates::Array{Float32}`: Columns of N particles, rows of 3 coordinates.
-- `smoothing_lengths::Array{Float32}`: The smoothing lengths of all of the particles.
+- `smoothing_lengths::Array{Float32}`: The smoothing lengths of all of the 
+                                       particles.
 - `deposits::Array{Float32}`: The quantities to deposit onto the grid.
 ...
 """
-function interpolate_particles(container::Interpolators.MovingLeastSquares,
+function interpolate_particles(container::Interpolators.MovingLeastSquaresVariable,
+                               coordinates::Array{Float32},
+                               smoothing_lengths::Array{Float32},
+                               deposits::Array{Float32})
+
+    N_particles = size(coordinates)[2]
+
+    println("N_particles=$N_particles")
+    grid_dimensions = container.grid_dimensions
+    grid = zeros(
+        Float32, 
+        (container.N_grid_x, container.N_grid_y, container.N_grid_z)
+    )
+    grid_sizes = [container.N_grid_x, container.N_grid_y, container.N_grid_z]
+    total_cells = container.N_grid_x * container.N_grid_y * container.N_grid_z
+
+    for i=1:3
+        println("grid_sizes[$i]=", grid_sizes[i])
+        println("grid_dimensions[$i]=", grid_dimensions[i])
+    end
+
+    # Using a BallTree leads to over a factor of ~10 times
+    # speed-up (maybe even more!)
+    particle_tree, _ = get_particle_tree(
+        container.kernel.dimension,
+        container.grid_dimensions,
+        coordinates
+    )
+
+    # True coordinates of the grid cell in that direction.
+    ruler_x = zeros(Float32, grid_sizes[1])
+    ruler_y = zeros(Float32, grid_sizes[2])
+    ruler_z = zeros(Float32, grid_sizes[3])
+
+    ruler_x = Float32.(
+        ((1:(grid_sizes[1] + 1) .- 1) .+ 0.5) .* 
+            (grid_dimensions[1] / (grid_sizes[1] + 1))
+    )
+
+    if container.kernel.dimension == 1
+        ruler_y = zeros(Float32, 1)
+        ruler_z = zeros(Float32, 1)
+    elseif container.kernel.dimension == 2
+        ruler_y = Float32.(
+            ((1:(grid_sizes[2] + 1) .- 1) .+ 0.5) .* 
+                (grid_dimensions[2] / (grid_sizes[2] + 1))
+        )
+        ruler_z = zeros(Float32, 1)
+    else
+        ruler_y = Float32.(
+            ((1:(grid_sizes[2] + 1) .- 1) .+ 0.5) .* 
+                (grid_dimensions[2] / (grid_sizes[2] + 1))
+        )
+        ruler_z = Float32.(
+            ((1:(grid_sizes[3] + 1) .- 1) .+ 0.5) .* 
+                (grid_dimensions[3] / (grid_sizes[3] + 1))
+        )
+    end
+
+    # Maximum neighbors must be N_max > p + 1, where p = 10 for 2nd order.
+    # p = 4 for first order.
+    max_neighbors = 20
+
+    # TODO: 10 is for 2nd order, 4 is for 1st order
+    Lambda_I_ij = zeros(Float32, (Threads.nthreads(), 10, max_neighbors))
+    T_I_i = zeros(Float32, (Threads.nthreads(), 10))
+    R_IJ_i = zeros(Float32, (Threads.nthreads(), 10, 10))
+    F_J_i = zeros(Float32, (Threads.nthreads(), 10))
+    kernel_weights_ij = zeros(Float32, (Threads.nthreads(), max_neighbors))
+    L_ij = zeros(Float32, (Threads.nthreads(), max_neighbors))
+    local_coords = zeros(Float32, (Threads.nthreads(), 3, max_neighbors))
+
+    # To make sure that we conserve the deposit, we
+    # need to find the sum of kernel weights for all
+    # of the particles before we do the interpolation.
+    # We will loop over all particles and all the grid
+    # cells that they might contribute to, based on the
+    # cutoff radius.
+    delta_x = grid_dimensions[1] / grid_sizes[1]
+    delta_y = grid_dimensions[2] / grid_sizes[2]
+    delta_z = grid_dimensions[3] / grid_sizes[3]
+
+    all_particle_weights = zeros(Float32, N_particles)
+    all_particle_extents = zeros(Float32, (Threads.nthreads(), N_particles))
+    h_inv = zeros(Float32, N_particles)
+    
+    N_threads = Threads.nthreads()
+
+    if isfile("neighbor_list_N$max_neighbors.jld") && 
+        isfile("all_particle_extents_N$max_neighbors.jld")
+
+        println("Are you sure the files were done with $N_threads threads?")
+        println("Gonna load 'em anyway.")
+
+        neighbor_list = load(
+            "neighbor_list_N$max_neighbors.jld"
+        )["neighbor_list"]
+        all_particle_extents = load(
+            "all_particle_extents_N$max_neighbors.jld"
+        )["all_particle_extents"]
+    else
+        # This is really expensive!
+        neighbor_list = zeros(
+            UInt64, 
+            (max_neighbors, grid_sizes[1], grid_sizes[2], grid_sizes[3])
+        )
+
+        # Loop over all particles and determine their weighting
+        # onto the grid for the MLS method.
+        # We do this because we are using the MovingLeastSquaresVariable
+        # interpolator which always searches for at least max_neighbors
+        # particles near the grid cell rather than using a fixed radius.
+        # 
+        # This is more useful (and necessary) in highly variable 
+        # density flows like supersonic turbulence where the scales
+        # are clearly separated.
+        # For each grid cell, search for the max_neighbors number of
+        # neighbors and store the neighbor list for later. Additionally,
+        # we store the maximum extent of each particle 
+        progress = ProgressMeter.Progress(
+            total_cells, 
+            0.5, 
+            "Determining the neighbor list for $total_cells cells..."
+        )
+
+        @inbounds Threads.@threads for I in CartesianIndices(grid)
+            ci, cj, ck = Tuple(I)
+            idx, distances = NearestNeighbors.knn(
+                particle_tree, 
+                [ruler_x[ci], ruler_y[cj], ruler_z[ck]],
+                max_neighbors 
+            )
+
+            neighbor_list[:, ci, cj, ck] = idx
+
+            @inbounds for ni in eachindex(idx)
+                all_particle_extents[Threads.threadid(), idx[ni]] = max(
+                    distances[ni], 
+                    all_particle_extents[Threads.threadid(), idx[ni]]
+                )
+            end
+
+            ProgressMeter.next!(progress)
+        end
+
+        println("Saving neighbor_list and all_particle_extents to disk.")
+        println("Requires the same number of threads to reload!")
+
+        save(
+            "neighbor_list_N$max_neighbors.jld", 
+            "neighbor_list", 
+            neighbor_list
+        )
+        save(
+            "all_particle_extents_N$max_neighbors.jld", 
+            "all_particle_extents", 
+            all_particle_extents
+        )
+    end
+
+    progress = ProgressMeter.Progress(
+        N_particles, 
+        0.5, 
+        "Determining particle weights for $N_particles particles..."
+    )
+
+    # Loop through all particles and find out the number of cells
+    # they span. We need this information so that we can compute
+    # L_ij from Shi et al (2013), which relies on the total
+    # weight contributions of the particles.
+    @inbounds Threads.@threads for p=1:N_particles
+        radius = maximum(all_particle_extents[:, p])
+        if radius == 0.0
+            h_inv[p] = 1.0
+            continue
+        else
+            h_inv[p] = Float32(1.0) / radius
+        end
+
+        # Add a buffer of 2 cells on each side in case of overlap.
+        max_first_cells = trunc(Int64, 2.0 * radius / delta_x + 2.0)
+        max_second_cells = trunc(Int64, 2.0 * radius / delta_y + 2.0)
+        max_third_cells = trunc(Int64, 2.0 * radius / delta_z + 2.0)
+
+        #println("max_first_cells=$max_first_cells")
+        #println("max_second_cells=$max_second_cells")
+        #println("max_third_cells=$max_third_cells")
+
+        first_indices = zeros(Int64, max_first_cells)
+        second_indices = zeros(Int64, max_second_cells)
+        third_indices = zeros(Int64, max_third_cells)
+        first_diffs = zeros(Float32, max_first_cells)
+        second_diffs = zeros(Float32, max_second_cells)
+        third_diffs = zeros(Float32, max_third_cells)
+
+        # All particles have the same extent here, since we are
+        # grid centric and looking over a certain radius.
+        # Just look at p=1 and be done.
+        min_first_idx = Tools.get_min_idx(
+            coordinates[1, p],
+            radius,
+            delta_x
+        )
+        max_first_idx = Tools.get_max_idx(
+            coordinates[1, p],
+            radius,
+            delta_x
+        )
+
+        min_second_idx = Tools.get_min_idx(
+            coordinates[2, p],
+            radius,
+            delta_y
+        )
+        max_second_idx = Tools.get_max_idx(
+            coordinates[2, p],
+            radius,
+            delta_y
+        )
+
+        min_third_idx = Tools.get_min_idx(
+            coordinates[3, p],
+            radius,
+            delta_z
+        )
+        max_third_idx = Tools.get_max_idx(
+            coordinates[3, p],
+            radius,
+            delta_z
+        )
+
+        # What is the total extent in cells of the particle?
+        num_first_cells = max_first_idx - min_first_idx + 1
+        num_second_cells = max_second_idx - min_second_idx + 1
+        num_third_cells = max_third_idx - min_third_idx + 1
+
+        #println("num_first_cells=$num_first_cells")
+        #println("num_second_cells=$num_second_cells")
+        #println("num_third_cells=$num_third_cells")
+
+        Tools.get_indices_differences(
+            min_first_idx, max_first_idx, 
+            first_indices, 
+            first_diffs, 
+            coordinates[1, p], 
+            grid_sizes[1],
+            ruler_x
+        )
+
+        Tools.get_indices_differences(
+            min_second_idx, max_second_idx, 
+            second_indices, 
+            second_diffs, 
+            coordinates[2, p], 
+            grid_sizes[2],
+            ruler_y
+        )
+
+        Tools.get_indices_differences(
+            min_third_idx, max_third_idx, 
+            third_indices, 
+            third_diffs, 
+            coordinates[3, p], 
+            grid_sizes[3],
+            ruler_z
+        )
+
+        @inbounds for ck=1:num_third_cells, cj=1:num_second_cells, ci=1:num_first_cells
+            all_particle_weights[p] += Kernels.kernel_evaluate(
+                sqrt(
+                    first_diffs[ci]^2 + 
+                    second_diffs[cj]^2 + 
+                    third_diffs[ck]^2
+                ),
+                h_inv[p],
+                container.kernel
+            )
+        end
+
+        ProgressMeter.next!(progress)
+    end
+
+    # For each grid cell, search within some cutoff
+    # radius for particles and then sum them into the bin.
+    progress = ProgressMeter.Progress(
+        total_cells, 
+        0.5, 
+        "Interpolating $N_particles particles over $total_cells cells..."
+    )
+    @inbounds Threads.@threads for I in CartesianIndices(grid)
+        ci, cj, ck = Tuple(I)
+        thread_id = Threads.threadid()
+        idx = neighbor_list[:, ci, cj, ck]
+
+        local_deposits = @views(deposits[idx])
+        N_nearby = length(local_deposits)
+
+        # local_coords hold the centered coordinates of the particle compared
+        # to the grid cell.
+        local_coords[thread_id, 1, 1:N_nearby] = @views(coordinates[1, idx]) .- ruler_x[ci]
+        local_coords[thread_id, 2, 1:N_nearby] = @views(coordinates[2, idx]) .- ruler_y[cj]
+        local_coords[thread_id, 3, 1:N_nearby] = @views(coordinates[3, idx]) .- ruler_z[ck]
+
+        @inbounds for p=1:N_nearby, dim=1:3
+            if local_coords[thread_id, dim, p] < -0.5
+                local_coords[thread_id, dim, p] += 1.0
+            end
+            if local_coords[thread_id, dim, p] > 0.5
+                local_coords[thread_id, dim, p] -= 1.0
+            end
+        end
+
+
+        if N_nearby < 11 || N_nearby > max_neighbors
+            error("Cell ($ci, $cj, $ck) has a bad neighbor count (N=$N_nearby)!")
+            continue
+        end
+
+        @inbounds for p=1:N_nearby
+            if all_particle_weights[idx[p]] == 0.0
+                all_particle_weights[idx[p]] = 1.0
+            else
+                kernel_weights_ij[thread_id, p] = Kernels.kernel_evaluate(
+                    sqrt(
+                        local_coords[thread_id, 1, p]^2 +
+                        local_coords[thread_id, 2, p]^2 +
+                        local_coords[thread_id, 3, p]^2
+                    ),
+                    h_inv[idx[p]],
+                    container.kernel
+                )
+            end
+        end
+
+        @inbounds for p=1:N_nearby
+            L_ij[thread_id, p] = kernel_weights_ij[thread_id, p] / all_particle_weights[idx[p]]
+            Lambda_I_ij[thread_id, 1, p] = Float32(1.0)
+            Lambda_I_ij[thread_id, 2, p] = local_coords[thread_id, 1, p]
+            Lambda_I_ij[thread_id, 3, p] = local_coords[thread_id, 2, p]
+            Lambda_I_ij[thread_id, 4, p] = local_coords[thread_id, 3, p]
+            Lambda_I_ij[thread_id, 5, p] = 0.5 * local_coords[thread_id, 1, p]^2.0
+            Lambda_I_ij[thread_id, 6, p] = 0.5 * local_coords[thread_id, 2, p]^2.0
+            Lambda_I_ij[thread_id, 7, p] = 0.5 * local_coords[thread_id, 3, p]^2.0
+            Lambda_I_ij[thread_id, 8, p] = 0.5 * local_coords[thread_id, 1, p] * local_coords[thread_id, 2, p]
+            Lambda_I_ij[thread_id, 9, p] = 0.5 * local_coords[thread_id, 1, p] * local_coords[thread_id, 3, p]
+            Lambda_I_ij[thread_id, 10, p] = 0.5 * local_coords[thread_id, 2, p] * local_coords[thread_id, 3, p]
+        end
+
+        @inbounds for dim2=1:10, dim1=1:10
+            T_I_i[thread_id, dim2] = 0.0
+            R_IJ_i[thread_id, dim1, dim2] = 0.0
+        end
+
+        @inbounds for p=1:N_nearby, dim=1:10
+            T_I_i[thread_id, dim] += L_ij[thread_id, p] * local_deposits[p] * 
+                                     Lambda_I_ij[thread_id, dim, p] 
+        end
+
+        @inbounds for p=1:N_nearby, dim2=1:10, dim1=1:10
+            # The second Lambda_I_ij is really Theta_J_ij
+            R_IJ_i[thread_id, dim1, dim2] += L_ij[thread_id, p] * 
+                                             Lambda_I_ij[thread_id, dim1, p] * 
+                                             Lambda_I_ij[thread_id, dim2, p]
+        end
+
+        try
+            # Solve for the values and gradients
+            F_J_i = R_IJ_i[thread_id, :, :] \ T_I_i[thread_id, :]
+        catch err
+            println(all_particle_weights[idx])
+            println(kernel_weights_ij[thread_id])
+            println(R_IJ_i[thread_id, :, :])
+            println(T_I_i[thread_id])
+            error("Error: $err, N_nearby=$N_nearby")
+        end
+
+        if isnan(F_J_i[1])
+            println(L_ij[thread_id])
+            println(all_particle_weights[idx])
+            println(kernel_weights_ij[thread_id])
+            println(R_IJ_i[thread_id])
+            println(T_I_i[thread_id])
+            println(Lambda_I_ij[thread_id])
+            error("F_J_i[1] is NaN.")
+        end
+
+        # Store the value of the deposit at this location
+        grid[ci, cj, ck] = F_J_i[1]
+
+        ProgressMeter.next!(progress)
+    end
+
+    grid
+end
+
+"""
+    interpolate_particles(container::MovingLeastSquaresFixed, 
+                          coordinates::Array{Float32},
+                          smoothing_lengths::Array{Float32},
+                          deposits::Array{Float32})
+
+    Construct the grid to interpolate the particle data, and then interpolate. 
+    The type of interpolation depends on the type of ParticleCentricContainer
+    passed to the function.
+...
+# Arguments
+- `container::MovingLeastSquaresFixed`: A MovingLeastSquaresFixed struct that
+                                        contains the particle data, tree, and 
+                                        grid.
+- `coordinates::Array{Float32}`: Columns of N particles, rows of 3 
+                                 coordinates.
+- `smoothing_lengths::Array{Float32}`: The smoothing lengths of all of the 
+                                       particles.
+- `deposits::Array{Float32}`: The quantities to deposit onto the grid.
+...
+"""
+function interpolate_particles(container::Interpolators.MovingLeastSquaresFixed,
                                coordinates::Array{Float32},
                                smoothing_lengths::Array{Float32},
                                deposits::Array{Float32})
@@ -172,7 +596,8 @@ function interpolate_particles(container::Interpolators.MovingLeastSquares,
     ruler_z = zeros(Float32, grid_sizes[3])
 
     ruler_x = Float32.(
-        ((1:(grid_sizes[1] + 1) .- 1) .+ 0.5) .* (grid_dimensions[1] / (grid_sizes[1] + 1))
+        ((1:(grid_sizes[1] + 1) .- 1) .+ 0.5) .* 
+            (grid_dimensions[1] / (grid_sizes[1] + 1))
     )
 
     if container.kernel.dimension == 1
@@ -180,15 +605,18 @@ function interpolate_particles(container::Interpolators.MovingLeastSquares,
         ruler_z = zeros(Float32, 1)
     elseif container.kernel.dimension == 2
         ruler_y = Float32.(
-            ((1:(grid_sizes[2] + 1) .- 1) .+ 0.5) .* (grid_dimensions[2] / (grid_sizes[2] + 1))
+            ((1:(grid_sizes[2] + 1) .- 1) .+ 0.5) .* 
+                (grid_dimensions[2] / (grid_sizes[2] + 1))
         )
         ruler_z = zeros(Float32, 1)
     else
         ruler_y = Float32.(
-            ((1:(grid_sizes[2] + 1) .- 1) .+ 0.5) .* (grid_dimensions[2] / (grid_sizes[2] + 1))
+            ((1:(grid_sizes[2] + 1) .- 1) .+ 0.5) .* 
+                (grid_dimensions[2] / (grid_sizes[2] + 1))
         )
         ruler_z = Float32.(
-            ((1:(grid_sizes[3] + 1) .- 1) .+ 0.5) .* (grid_dimensions[3] / (grid_sizes[3] + 1))
+            ((1:(grid_sizes[3] + 1) .- 1) .+ 0.5) .* 
+                (grid_dimensions[3] / (grid_sizes[3] + 1))
         )
     end
 
@@ -688,6 +1116,7 @@ function interpolate_particles(container::Interpolators.ParticleCentricContainer
     grid_dimensions ./= max_coord
     coordinates ./= max_coord
 
+    # If there are no smoothing lengths, we must compute them!
     if all(y->y==smoothing_lengths[1], smoothing_lengths)
         @warn "This will be very VERY slow, NearestNeighbors.jl is not threaded!"
 
